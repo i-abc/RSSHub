@@ -570,6 +570,10 @@ This route provides a flexible plan with full text content to subscribe specific
 
 <RouteEn author="ETiV" example="/openai/chatgpt/release-notes" path="/openai/chatgpt/release-notes" />
 
+### Research
+
+<RouteEn author="yuguorui" example="/openai/research" path="/openai/research" />
+
 ## Phoronix
 
 ### News & Reviews
@@ -606,12 +610,6 @@ Compared to the official one, this feed:
 | fr       | en      | es      | zh-hans  | zh-hant  | ar      | pa     | tl      |
 
 </RouteEn>
-
-## RSS3
-
-### Blog
-
-<RouteEn author="nczitzk" example="/rss3/blog" path="/rss3/blog"/>
 
 ## Sakamichi Series
 

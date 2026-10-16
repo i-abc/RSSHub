@@ -1,7 +1,12 @@
-import { Route } from '@/types';
-import ofetch from '@/utils/ofetch';
 import { load } from 'cheerio';
+
+import type { Route } from '@/types';
+import ofetch from '@/utils/ofetch';
 import { parseDate } from '@/utils/parse-date';
+
+function isMissingPublicationValue(value: unknown): value is null | undefined | '' {
+    return ([undefined, null, ''] as unknown[]).includes(value);
+}
 
 export const route: Route = {
     path: '/projects/:category?',
@@ -21,6 +26,10 @@ export const route: Route = {
             source: ['instructables.com/projects'],
             target: '/projects',
         },
+        {
+            source: ['instructables.com/circuits/projects'],
+            target: '/projects/circuits',
+        },
     ],
     name: 'Projects',
     maintainers: ['wolfg1969'],
@@ -31,9 +40,17 @@ export const route: Route = {
 |     | circuits | workshop | craft | cooking | living | outside | teachers |`,
 };
 
+const parsePublicationDate = (value?: string | number) => {
+    if (isMissingPublicationValue(value)) {
+        return;
+    }
+    const date = parseDate(value);
+    return Number.isFinite(date.getTime()) ? date : undefined;
+};
+
 async function handler(ctx) {
     const { category = 'all' } = ctx.req.param();
-    const limit = ctx.req.query('limit') ? Number.parseInt(ctx.req.query('limit'), 10) : 50;
+    const limit = ctx.req.query('limit') ? Number(ctx.req.query('limit')) : 50;
 
     const siteDomain = 'instructables.com';
 
@@ -74,16 +91,16 @@ async function handler(ctx) {
     });
 
     return {
-        title: 'Instructables Projects', // 项目的标题
-        link: `https://${siteDomain}/projects`, // 指向项目的链接
-        description: 'Instructables Projects', // 描述项目
-        language: 'en', // 频道语言
+        title: 'Instructables Projects',
+        link: pageLink,
+        description: 'Instructables Projects',
+        language: 'en' as const,
         item: data.hits.map((item) => ({
             title: item.document.title,
             link: `https://${siteDomain}/${item.document.urlString}`,
             author: item.document.screenName,
             description: `<img src="${item.document.coverImageUrl}?auto=webp&crop=1.2%3A1&frame=1&width=500" width="500">`,
-            pubDate: parseDate(item.document.publishDate),
+            pubDate: parsePublicationDate(item.document.publishDate),
             category: item.document.primaryClassification,
         })),
     };

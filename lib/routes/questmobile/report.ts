@@ -1,28 +1,27 @@
-import { Route } from '@/types';
-import { getCurrentPath } from '@/utils/helpers';
-const __dirname = getCurrentPath(import.meta.url);
+import { load } from 'cheerio';
+import pMap from 'p-map';
 
+import type { DataItem, Route } from '@/types';
 import cache from '@/utils/cache';
 import got from '@/utils/got';
-import { load } from 'cheerio';
-import { parseDate } from '@/utils/parse-date';
-import { art } from '@/utils/render';
-import path from 'node:path';
+import { parseDateInTimezone } from '@/utils/parse-date-in-timezone';
+
+import { renderDescription } from './templates/description';
 
 /**
  * Parses a tree array and returns an array of objects containing the key-value pairs.
  * @param {Array} tree - The tree to parse.
- * @param {Array} result - The result array to store the parsed key-value pairs. Default is an empty array.
  *
  * @returns {Array} - An array of objects containing the key-value pairs.
  */
-const parseTree = (tree, result = []) => {
+const parseTree = (tree) => {
+    const result: Array<{ key: any; value: any }> = [];
     for (const obj of tree) {
         const { key, value, children } = obj;
         result.push({ key, value });
 
         if (children && children.length > 0) {
-            parseTree(children, result);
+            result.push(...parseTree(children));
         }
     }
 
@@ -31,7 +30,7 @@ const parseTree = (tree, result = []) => {
 
 export const route: Route = {
     path: '/report/:industry?/:label?',
-    categories: ['new-media', 'popular'],
+    categories: ['new-media'],
     example: '/questmobile/report',
     parameters: { industry: '行业，见下表，默认为 `-1`，即全部行业', label: '标签，见下表，默认为 `-1`，即全部标签' },
     features: {
@@ -46,14 +45,14 @@ export const route: Route = {
     maintainers: ['nczitzk'],
     handler,
     description: `::: tip
-  若订阅行业 [互联网行业](https://www.questmobile.com.cn/research/reports/1/-1)，网址为 \`https://www.questmobile.com.cn/research/reports/1/-1\`
-  参数 industry 为 \`互联网行业\` 或 \`1\`，此时路由为 [\`/questmobile/report/互联网行业\`](https://rsshub.app/questmobile/report/互联网行业) 或 [\`/questmobile/report/1/-1\`](https://rsshub.app/questmobile/report/1/-1)。
+若订阅行业 [互联网行业](https://www.questmobile.com.cn/research/reports/1/-1)，网址为 \`https://www.questmobile.com.cn/research/reports/1/-1\`
+参数 industry 为 \`互联网行业\` 或 \`1\`，此时路由为 [\`/questmobile/report/互联网行业\`](https://rsshub.app/questmobile/report/互联网行业) 或 [\`/questmobile/report/1/-1\`](https://rsshub.app/questmobile/report/1/-1)。
 
-  若订阅标签 [榜单](https://www.questmobile.com.cn/research/reports/-1/11)，网址为 \`https://www.questmobile.com.cn/research/reports/-1/11\`
-  参数 label 为 \`榜单\` 或 \`11\`，此时路由为 [\`/questmobile/report/榜单\`](https://rsshub.app/questmobile/report/榜单) 或 [\`/questmobile/report/-1/11\`](https://rsshub.app/questmobile/report/-1/11)。
+若订阅标签 [榜单](https://www.questmobile.com.cn/research/reports/-1/11)，网址为 \`https://www.questmobile.com.cn/research/reports/-1/11\`
+参数 label 为 \`榜单\` 或 \`11\`，此时路由为 [\`/questmobile/report/榜单\`](https://rsshub.app/questmobile/report/榜单) 或 [\`/questmobile/report/-1/11\`](https://rsshub.app/questmobile/report/-1/11)。
 
-  若订阅行业和标签 [品牌领域 - 互联网经济](https://www.questmobile.com.cn/research/reports/2/1)，网址为 \`https://www.questmobile.com.cn/research/reports/2/1\`
-  参数 industry 为 \`品牌领域\` 或 \`2\`，参数 label 为 \`互联网经济\` 或 \`1\`，此时路由为 [\`/questmobile/report/品牌领域/互联网经济\`](https://rsshub.app/questmobile/report/品牌领域/互联网经济) 或 [\`/questmobile/report/2/1\`](https://rsshub.app/questmobile/report/2/1)，甚至 [\`/questmobile/report/品牌领域/1\`](https://rsshub.app/questmobile/report/品牌领域/1)。
+若订阅行业和标签 [品牌领域 - 互联网经济](https://www.questmobile.com.cn/research/reports/2/1)，网址为 \`https://www.questmobile.com.cn/research/reports/2/1\`
+参数 industry 为 \`品牌领域\` 或 \`2\`，参数 label 为 \`互联网经济\` 或 \`1\`，此时路由为 [\`/questmobile/report/品牌领域/互联网经济\`](https://rsshub.app/questmobile/report/品牌领域/互联网经济) 或 [\`/questmobile/report/2/1\`](https://rsshub.app/questmobile/report/2/1)，甚至 [\`/questmobile/report/品牌领域/1\`](https://rsshub.app/questmobile/report/品牌领域/1)。
 :::
 
 <details>
@@ -154,28 +153,29 @@ export const route: Route = {
 | 智能终端 | 国产终端 | 5G 手机 | 盘点 | 季度报告 |
 | -------- | -------- | ------- | ---- | -------- |
 | 9001     | 9002     | 9003    | 10   | 10001    |
+
 </details>`,
 };
 
 async function handler(ctx) {
     const { industry, label } = ctx.req.param();
-    const limit = ctx.req.query('limit') ? Number.parseInt(ctx.req.query('limit'), 10) : 50;
+    const requestedLimit = Number(ctx.req.query('limit'));
+    const limit = Number.isSafeInteger(requestedLimit) && requestedLimit > 0 ? requestedLimit : 50;
 
     const rootUrl = 'https://www.questmobile.com.cn';
     const apiUrl = new URL('api/v2/report/article-list', rootUrl).href;
     const apiTreeUrl = new URL('api/v2/report/industry-label-tree', rootUrl).href;
 
     const {
-        data: {
-            data: { industryTree, labelTree },
-        },
+        data: { data: treeData },
     } = await got(apiTreeUrl);
+    const { industryTree, labelTree } = treeData;
 
     const industries = parseTree(industryTree);
     const labels = parseTree(labelTree);
 
     const industryObj = industry ? industries.find((i) => i.key === industry || i.value === industry) : undefined;
-    const labelObj = label ? labels.find((i) => i.key === label || i.value === label) : (industryObj ? undefined : labels.find((i) => i.key === industry || i.value === industry));
+    const labelObj = label ? labels.find((i) => i.key === label || i.value === label) : industryObj ? undefined : labels.find((i) => i.key === industry || i.value === industry);
 
     const industryId = industryObj?.key ?? -1;
     const labelId = labelObj?.key ?? -1;
@@ -192,10 +192,10 @@ async function handler(ctx) {
         },
     });
 
-    let items = response.data.slice(0, limit).map((item) => ({
+    let items: Array<DataItem & { link: string }> = response.data.slice(0, limit).map((item) => ({
         title: item.title,
         link: new URL(`research/report/${item.id}`, rootUrl).href,
-        description: art(path.join(__dirname, 'templates/description.art'), {
+        description: renderDescription({
             image: {
                 src: item.coverImgUrl,
                 alt: item.title,
@@ -205,11 +205,12 @@ async function handler(ctx) {
         }),
         category: [...(item.industryList ?? []), ...(item.labelList ?? [])],
         guid: `questmobile-report#${item.id}`,
-        pubDate: parseDate(item.publishTime),
+        pubDate: item.publishTime ? parseDateInTimezone(item.publishTime, 8) : undefined,
     }));
 
-    items = await Promise.all(
-        items.map((item) =>
+    items = await pMap(
+        items,
+        (item) =>
             cache.tryGet(item.link, async () => {
                 const { data: detailResponse } = await got(item.link);
 
@@ -218,8 +219,8 @@ async function handler(ctx) {
                 content('div.text div.daoyu').remove();
 
                 item.title = content('div.title h1').text();
-                item.description += art(path.join(__dirname, 'templates/description.art'), {
-                    description: content('div.text').html(),
+                item.description += renderDescription({
+                    description: content('div.text').html() ?? undefined,
                 });
                 item.author = content('div.source')
                     .text()
@@ -228,18 +229,21 @@ async function handler(ctx) {
                     .find('span')
                     .toArray()
                     .map((c) => content(c).text());
-                item.pubDate = parseDate(content('div.data span').prop('datetime'));
+                const date = content('div.data span').attr('datetime') || content('div.data span').text();
+                if (date) {
+                    item.pubDate = parseDateInTimezone(date, 8);
+                }
 
                 return item;
-            })
-        )
+            }),
+        { concurrency: 3 }
     );
 
     const { data: currentResponse } = await got(currentUrl);
 
     const $ = load(currentResponse);
 
-    const author = $('meta[property="og:title"]').prop('content').split(/-/)[0];
+    const author = $('meta[property="og:title"]').prop('content').split(/-/, 1)[0];
     const categories = [industryObj?.value, labelObj?.value].filter(Boolean);
     const image = $(`img[alt="${author}"]`).prop('src');
     const icon = $('link[rel="shortcut icon"]').prop('href');
@@ -249,12 +253,11 @@ async function handler(ctx) {
         title: `${author}${categories.length === 0 ? '' : ` - ${categories.join(' - ')}`}`,
         link: currentUrl,
         description: $('meta[property="og:description"]').prop('content'),
-        language: 'zh',
+        language: 'zh' as const,
         image,
         icon,
         logo: icon,
         subtitle: $('meta[name="keywords"]').prop('content'),
         author,
-        allowEmpty: true,
     };
 }

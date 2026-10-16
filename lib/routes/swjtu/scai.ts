@@ -1,8 +1,12 @@
-import { Route } from '@/types';
-import cache from '@/utils/cache';
 import { load } from 'cheerio';
-import { parseDate } from '@/utils/parse-date';
+import pMap from 'p-map';
+
+import InvalidParameterError from '@/errors/types/invalid-parameter';
+import type { DataItem, Route } from '@/types';
+import cache from '@/utils/cache';
 import ofetch from '@/utils/ofetch';
+import { parseDate } from '@/utils/parse-date';
+import timezone from '@/utils/timezone';
 
 const rootURL = 'https://scai.swjtu.edu.cn';
 
@@ -21,17 +25,27 @@ export const route: Route = {
     },
     radar: [
         {
-            source: ['scai.swjtu.edu.cn/'],
+            title: '计算机与人工智能学院 - 本科生教育',
+            source: ['scai.swjtu.edu.cn/', 'scai.swjtu.edu.cn/web/page-module.html'],
+            target: '/scai/bks',
+        },
+        {
+            title: '计算机与人工智能学院 - 研究生教育',
+            source: ['scai.swjtu.edu.cn/', 'scai.swjtu.edu.cn/web/page-module.html'],
+            target: '/scai/yjs',
+        },
+        {
+            title: '计算机与人工智能学院 - 学生工作',
+            source: ['scai.swjtu.edu.cn/', 'scai.swjtu.edu.cn/web/page-module.html'],
+            target: '/scai/xsgz',
         },
     ],
     name: '计算机与人工智能学院',
-    description: `
-| 分区              | 参数         |
-| ----------------- | ----------- |
-| 本科生教育         | bks         |
-| 研究生教育         | yjs         |
-| 学生工作           | xsgz        |
-`,
+    description: `| 分区       | 参数 |
+| ---------- | ---- |
+| 本科生教育 | bks  |
+| 研究生教育 | yjs  |
+| 学生工作   | xsgz |`,
     maintainers: ['AzureG03', 'SuperJeason'],
     handler,
 };
@@ -51,52 +65,59 @@ const partition = {
     },
 };
 
-const getItem = (item, cache) => {
+const getCalendarDate = (parts: string[] | undefined): Date | undefined => {
+    const date = parts ? parseDate(`${parts[0]}-${parts[1].padStart(2, '0')}-${parts[2].padStart(2, '0')}`, 'YYYY-MM-DD', true) : undefined;
+    return date && !Number.isNaN(date.getTime()) ? timezone(date, 8) : undefined;
+};
+
+async function getArticle(link: string): Promise<Partial<DataItem>> {
+    const res = await ofetch(link);
+    const $ = load(res);
+    const dateText = $('div.news-info span:nth-of-type(2)').text() || $('div.news-top-bar span:nth-of-type(1)').text();
+    const item: Partial<DataItem> = { description: $('div.content-main').html() };
+    const pubDate = getCalendarDate(dateText.match(/(\d{4})[-/.年](\d{1,2})[-/.月](\d{1,2})/)?.slice(1));
+    if (pubDate) {
+        item.pubDate = pubDate;
+    }
+    return item;
+}
+
+const getItem = async (item) => {
     const title = item.find('a').text();
     const link = `${rootURL}${item.find('a').attr('href').slice(2)}`;
-
-    return cache.tryGet(link, async () => {
-        const res = await ofetch(link);
-        const $ = load(res);
-
-        let dateText = $('div.news-info span:nth-of-type(2)').text();
-        // 转教务通知时的时间获取方法
-        if (!dateText) {
-            dateText = $('div.news-top-bar span:nth-of-type(1)').text();
-        }
-        // 'date' may be undefined. and 'parseDate' will return current time.
-        const date = dateText.match(/\d{4}(-|\/|.)\d{1,2}\1\d{1,2}/)?.[0];
-        const pubDate = parseDate(date);
-        const description = $('div.content-main').html();
-
-        return {
-            title,
-            pubDate,
-            link,
-            description,
-        };
-    });
+    const calendar = item.find('.calendar');
+    const yearMonth = calendar
+        .find('.date')
+        .text()
+        .match(/(\d{4})\/(\d{1,2})/);
+    const day = calendar.find('.day').text().trim();
+    const pubDate = getCalendarDate(yearMonth && /^\d{1,2}$/.test(day) ? [yearMonth[1], yearMonth[2], day] : undefined);
+    return { title, link, pubDate, ...(await cache.tryGet(`swjtu:scai:article:${link}`, () => getArticle(link))) };
 };
 
 async function handler(ctx) {
     const { type } = ctx.req.param();
+    if (!Object.hasOwn(partition, type)) {
+        throw new InvalidParameterError('Unsupported notice type. Use bks, yjs, or xsgz.');
+    }
     const url = partition[type].url;
     const res = await ofetch(url);
 
     const $ = load(res);
     const $list = $('div.list-top-item, div.item-wrapper');
 
-    const items = await Promise.all(
-        $list.toArray().map((i) => {
+    const items = await pMap(
+        $list.toArray(),
+        (i) => {
             const $item = $(i);
-            return getItem($item, cache);
-        })
+            return getItem($item);
+        },
+        { concurrency: 3 }
     );
 
     return {
         title: `西南交大计院-${partition[type].title}`,
         link: url,
         item: items,
-        allowEmpty: true,
     };
 }

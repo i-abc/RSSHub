@@ -1,8 +1,12 @@
-import { Route } from '@/types';
+import { load } from 'cheerio';
+
+import type { Route } from '@/types';
+import cache from '@/utils/cache';
 import got from '@/utils/got';
+import { getRouteLimit } from '@/utils/route-limit';
+
+import { loadArticle } from './article';
 import { SUB_NAME_PREFIX, SUB_URL } from './const';
-import loadArticle from './article';
-import { WPPost } from './types';
 
 export const route: Route = {
     path: '/category/:category',
@@ -16,6 +20,7 @@ export const route: Route = {
         supportBT: false,
         supportPodcast: false,
         supportScihub: false,
+        nsfw: true,
     },
     radar: [
         {
@@ -30,18 +35,23 @@ export const route: Route = {
 };
 
 async function handler(ctx) {
-    const limit = Number.parseInt(ctx.req.query('limit')) || 20;
+    const limit = getRouteLimit(ctx, 20);
     const category = ctx.req.param('category');
     const categoryUrl = `${SUB_URL}category/${category}/`;
 
-    const {
-        data: [{ id: categoryId }],
-    } = await got(`${SUB_URL}wp-json/wp/v2/categories?slug=${category}`);
-    const { data: posts } = await got(`${SUB_URL}wp-json/wp/v2/posts?categories=${categoryId}&per_page=${limit}`);
+    const response = await got(categoryUrl);
+    const $ = load(response.body);
+    const itemRaw = $('#content .post-item').slice(0, limit).toArray();
 
     return {
         title: `${SUB_NAME_PREFIX} - Category: ${category}`,
         link: categoryUrl,
-        item: posts.map((post) => loadArticle(post as WPPost)),
+        item: await Promise.all(
+            itemRaw.map((e) => {
+                const item = $(e);
+                const link = item.find('h5.post-title a').attr('href');
+                return cache.tryGet(link!, () => loadArticle(link));
+            })
+        ),
     };
 }

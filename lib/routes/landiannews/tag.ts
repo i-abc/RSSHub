@@ -1,4 +1,6 @@
-import { Data, DataItem, Route, ViewType } from '@/types';
+import type { Data, DataItem, Route } from '@/types';
+import { ViewType } from '@/types';
+
 import { fetchNewsItems, fetchTag } from './utils';
 
 export const handler = async (ctx): Promise<Data> => {
@@ -7,7 +9,7 @@ export const handler = async (ctx): Promise<Data> => {
     const { id, name } = await fetchTag(slug);
 
     const rootUrl = 'https://www.landiannews.com/';
-    const postApiUrl = `${rootUrl}wp-json/wp/v2/posts?_embed&tags=${id}`;
+    const postApiUrl = `${rootUrl}wp-json/wp/v2/posts?_embed=author,wp:term&tags=${id}`;
 
     const items: DataItem[] = await fetchNewsItems(postApiUrl);
 
@@ -41,6 +43,10 @@ export const route: Route = {
     radar: [
         {
             source: ['www.landiannews.com/archives/tag/:slug'],
+            target: '/tag/:slug',
+        },
+        {
+            source: ['www.landian.news/archives/tag/:slug'],
             target: '/tag/:slug',
         },
     ],
